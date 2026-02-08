@@ -231,6 +231,7 @@ body{
   background: rgba(0,0,0,.34);
 }
 
+/* Send */
 .send{
   width:44px; height:44px;
   border:none;
@@ -244,6 +245,31 @@ body{
 .send:hover{
   background: rgba(59,130,246,.82);
   transform: translateY(-1px);
+}
+
+/* Voice (NEW) */
+.voice{
+  width:44px; height:44px;
+  border:none;
+  border-radius: 14px;
+  background: rgba(255,255,255,.08);
+  color: white;
+  cursor:pointer;
+  border: 1px solid var(--border2);
+  transition: transform .12s ease, background .12s ease, border-color .12s ease, box-shadow .12s ease;
+}
+
+.voice:hover{
+  background: rgba(255,255,255,.12);
+  border-color: rgba(255,255,255,.10);
+  transform: translateY(-1px);
+}
+
+/* Recording state */
+.voice.rec{
+  background: rgba(255,0,80,.16);
+  border-color: rgba(255,0,80,.26);
+  box-shadow: 0 0 18px rgba(255,0,80,.18);
 }
 
 /* ===== Sidebar ===== */
