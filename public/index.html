@@ -37,8 +37,8 @@
             <div class="composer">
               <input id="chatInput" type="text" placeholder="Escribe un mensaje…" />
 
-              <!-- Voice button -->
-              <button id="voiceBtn" class="voice" title="Hablar">🎙️</button>
+              <!-- Voice (Call Mode) button -->
+              <button id="voiceBtn" class="voice" title="Conversar por voz">🎙️</button>
 
               <button id="sendBtn" class="send" title="Enviar">➤</button>
             </div>
@@ -108,6 +108,59 @@
               </div>
             </section>
           </aside>
+        </div>
+      </div>
+
+      <!-- VOICE OVERLAY (Call Mode) -->
+      <div id="voiceOverlay" class="voice-overlay hidden idle" aria-hidden="true">
+        <div class="voice-modal">
+          <div class="voice-top">
+            <div class="voice-title">
+              <div class="voice-name">ELARA</div>
+              <div class="voice-sub">
+                <span class="dot"></span> Conversación en vivo
+              </div>
+            </div>
+
+            <button id="voiceClose" class="voice-close" title="Cerrar">✕</button>
+          </div>
+
+          <div class="voice-center">
+            <div class="orb">
+              <div class="orb-ring"></div>
+              <div class="orb-core">
+                <div class="orb-initial">E</div>
+              </div>
+            </div>
+
+            <div class="visualizer" aria-hidden="true">
+              <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+              <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+              <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+              <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+            </div>
+
+            <div class="voice-hint" id="voiceHint">
+              Toca “Hablar” para empezar
+            </div>
+          </div>
+
+          <div class="voice-actions">
+            <button id="voiceMute" class="voice-act" title="Silenciar">
+              🔇
+              <span>Mute</span>
+            </button>
+
+            <button id="voiceStartStop" class="voice-act primary" title="Iniciar">
+              🎙️
+              <span>Hablar</span>
+            </button>
+
+            <button id="voiceEnd" class="voice-act danger" title="Finalizar">
+              ⛔
+              <span>Colgar</span>
+            </button>
+          </div>
         </div>
       </div>
     </main>
