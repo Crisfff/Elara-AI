@@ -8,7 +8,8 @@ const app = express();
 app.use(express.json());
 app.use(express.static("public"));
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const client = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
 /* =========================
    DATA (data.json)
@@ -21,12 +22,7 @@ function ensureDataFile() {
       DATA_PATH,
       JSON.stringify(
         {
-          meta: {
-            name: "ELARA",
-            currency_origin: "RUB",
-            currency_target: "CUP",
-            updated_at: null,
-          },
+          meta: { name: "ELARA", updated_at: null },
           cycles: {},
           liberaciones: [],
         },
@@ -60,43 +56,32 @@ function round2(n) {
   if (!Number.isFinite(n)) return n;
   return Math.round(n * 100) / 100;
 }
-function clampText(s) {
-  // Limpia cualquier cosa “tipo comando” o JSON que se cuele
+function oneLine(s) {
   if (!s) return "";
   let t = String(s).trim();
-
-  // si por error devolvió un JSON completo, intentamos sacar "say"
+  // Si por error devuelve JSON, intentamos sacar campo say
   if (t.startsWith("{") && t.endsWith("}")) {
     try {
-      const parsed = JSON.parse(t);
-      if (parsed?.say) t = String(parsed.say);
+      const j = JSON.parse(t);
+      if (j?.say) t = String(j.say);
     } catch {}
   }
-
-  // quita líneas raras tipo actions/type/data o llaves
-  t = t
-    .split("\n")
-    .filter((line) => {
-      const l = line.trim().toLowerCase();
-      if (!l) return false;
-      if (l.includes('"actions"') || l.includes('"type"') || l.includes('"data"')) return false;
-      if (l.startsWith("{") || l.startsWith("}")) return false;
-      if (l.startsWith("[") || l.startsWith("]")) return false;
-      return true;
-    })
-    .join("\n")
-    .trim();
-
-  // Limita a respuestas cortas (no párrafos)
-  const lines = t.split("\n").map((x) => x.trim()).filter(Boolean);
-  if (lines.length > 5) t = lines.slice(0, 5).join("\n");
-  if (t.length > 450) t = t.slice(0, 450).trim();
-
+  // quita saltos y deja 1 línea
+  t = t.replace(/\s*\n+\s*/g, " ").replace(/\s{2,}/g, " ").trim();
+  // evita parrafadas
+  if (t.length > 220) t = t.slice(0, 220).trim();
   return t;
 }
 
+function percentFromText(msg) {
+  const m = String(msg).replace(",", ".").match(/(\d+(?:\.\d+)?)\s*%/);
+  if (!m) return null;
+  const p = Number(m[1]);
+  return Number.isFinite(p) ? p : null;
+}
+
 /* =========================
-   REGLAS (DERIVADOS)
+   CÁLCULOS CICLO (DERIVADOS)
    ========================= */
 function calcCycleDerived(data, cycleId) {
   const id = String(cycleId);
@@ -127,22 +112,14 @@ function calcCycleDerived(data, cycleId) {
   else if (cycle.cup_pendientes <= 0) cycle.estado = "Cerrado";
   else cycle.estado = "En Progreso";
 
-  const alerts = [];
-  if (cycle.cup_pendientes !== null && cycle.cup_pendientes < -1) alerts.push("Pendientes negativos. Revisa datos.");
-  if (invertido !== null && cycle.ganancia_rub !== null && cycle.ganancia_rub < -1) alerts.push("Ganancia negativa. Revisa datos.");
-  cycle.alertas = alerts;
-
   return { ok: true, cycle, liberaciones: libs };
 }
 
 /* =========================
-   ACTIONS (internas)
+   CRUD / ACTIONS
    ========================= */
 function listCycles(data) {
   return Object.values(data.cycles).sort((a, b) => (a.ciclo || 0) - (b.ciclo || 0));
-}
-function getCycleDetail(data, ciclo) {
-  return calcCycleDerived(data, String(ciclo));
 }
 
 function createCycle(data, payload) {
@@ -150,7 +127,6 @@ function createCycle(data, payload) {
   if (!id || id === "undefined") return { ok: false, error: "Ciclo inválido" };
   if (data.cycles[id]) return { ok: false, error: `El ciclo ${id} ya existe` };
 
-  // Campos obligatorios del ciclo completo (tu Excel)
   const required = [
     "ciclo",
     "invertido_rub",
@@ -184,12 +160,11 @@ function createCycle(data, payload) {
     ganancia_rub: null,
     porcentaje: null,
     estado: "Pendiente",
-    alertas: [],
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
 
-  // Si hay CUP bruto y comisión CUP, calcula CUP disponibles
+  // Calcula CUP disponibles si hay cup_bruto y comision_cup
   if (cycle.cup_libres === null && cycle.cup_bruto !== null && cycle.comision_cup !== null) {
     cycle.cup_libres = round2(cycle.cup_bruto - cycle.comision_cup);
   }
@@ -200,81 +175,73 @@ function createCycle(data, payload) {
   return { ok: true, cycle: recalced.ok ? recalced.cycle : cycle };
 }
 
-function updateCycle(data, payload) {
-  const id = String(payload.ciclo);
-  const cycle = data.cycles[id];
-  if (!cycle) return { ok: false, error: `No existe el ciclo ${id}` };
-
-  const allowed = [
-    "invertido_rub",
-    "precio_usd_rub",
-    "comision_usdt",
-    "usdt_comprados",
-    "precio_usd_cup",
-    "cup_bruto",
-    "comision_cup",
-    "cup_libres",
-  ];
-
-  for (const k of allowed) {
-    if (payload[k] !== undefined) cycle[k] = toNumber(payload[k]);
-  }
-
-  if (cycle.cup_libres === null && cycle.cup_bruto !== null && cycle.comision_cup !== null) {
-    cycle.cup_libres = round2(cycle.cup_bruto - cycle.comision_cup);
-  }
-
-  cycle.updated_at = new Date().toISOString();
-  const recalced = calcCycleDerived(data, id);
-  return { ok: true, cycle: recalced.ok ? recalced.cycle : cycle };
-}
-
-function addLiberacion(data, payload) {
-  const id = String(payload.ciclo);
-  if (!data.cycles[id]) return { ok: false, error: `No existe el ciclo ${id}` };
-
-  const cup = toNumber(payload.cup_liberados);
-  const tasa = toNumber(payload.tasa_rub_cup);
-  let rub = toNumber(payload.rub_recibidos);
-
-  if (cup === null) return { ok: false, error: "Falta CUP liberados" };
-
-  if (rub === null && tasa !== null && tasa !== 0) {
-    rub = round2(cup / tasa);
-  }
-
-  const lib = {
-    id: crypto.randomUUID(),
-    ciclo: Number(id),
-    cup_liberados: cup,
-    tasa_rub_cup: tasa,
-    rub_recibidos: rub,
-    nota: payload.nota ? String(payload.nota) : null,
-    created_at: new Date().toISOString(),
-  };
-
-  data.liberaciones.push(lib);
-
-  const recalced = calcCycleDerived(data, id);
-  data.cycles[id].updated_at = new Date().toISOString();
-  return { ok: true, liberacion: lib, cycle: recalced.ok ? recalced.cycle : data.cycles[id] };
-}
-
 /* =========================
-   WIZARD MODO 2 (crear ciclo)
+   ELARA “VOZ” (IA SOLO PARA FRASES)
    ========================= */
-const WIZARD = new Map(); // sessionId => {step, draft}
-
-/* =========================
-   ELARA PROMPT (corto, amable, directo)
-   ========================= */
-const SYSTEM_RULES = `
-Eres ELARA. Responde SIEMPRE corto: 1 a 3 líneas. Máximo 5 bullets.
-Tono: amable, directo, profesional. Cero párrafos.
-Prohibido mostrar JSON, comandos o nombres técnicos. No digas "actions", "type", "data".
-Si falta un dato: pregunta SOLO 1 cosa y da un ejemplo.
-Siempre termina con: "Próximo paso: ...".
+const ELARA_STYLE = `
+Eres ELARA. Hablas en español, directo, amable, profesional.
+Reglas estrictas:
+- Responde SIEMPRE en 1 sola línea (sin saltos).
+- No uses “Próximo paso:”.
+- No uses paréntesis con ejemplos.
+- No menciones JSON, comandos, variables, ni nombres técnicos.
+- Haz 1 sola pregunta cuando falte un dato.
+- Si confirmas algo, que sea breve (máx 12 palabras) y pregunta lo siguiente.
 `.trim();
+
+async function elaraLine({ intent, have, need, userText, note }) {
+  // Fallback si no hay API
+  if (!client) {
+    const map = {
+      start: "Perfecto. ¿Qué número de ciclo es?",
+      ciclo: "¿Qué número de ciclo es?",
+      invertido_rub: "¿Cuántos RUB invertiste?",
+      precio_usd_rub: "¿A cuánto compraste el USDT en RUB?",
+      comision_usdt: "¿Qué comisión te cobraron en USDT?",
+      usdt_comprados: "¿Cuántos USDT compraste? Puedes decir “calcula tú”.",
+      precio_usd_cup: "¿A cuánto está el USD/CUP?",
+      comision_cup: "¿Cuál fue la comisión en CUP? Puedes decir un porcentaje.",
+      done: "Listo, ciclo creado. ¿Quieres añadir una liberación ahora?",
+    };
+    return map[need] || "Dime ese dato, porfa.";
+  }
+
+  const prompt =
+    `Contexto: estás guiando la creación de un ciclo.\n` +
+    `Usuario dijo: "${userText}"\n` +
+    `Ya tengo: ${JSON.stringify(have)}\n` +
+    `Me falta: ${need}\n` +
+    (note ? `Nota interna: ${note}\n` : "") +
+    `Genera una sola línea: confirma corto (si aplica) y pregunta SOLO por "${need}".`;
+
+  const r = await client.responses.create({
+    model: "gpt-5-mini",
+    instructions: ELARA_STYLE,
+    input: prompt,
+    max_output_tokens: 120,
+  });
+
+  return oneLine(r.output_text || "");
+}
+
+/* =========================
+   WIZARD (SERVER CONTROLA PASOS)
+   ========================= */
+const WIZARD = new Map(); // sessionId => { step, draft }
+
+const STEPS = [
+  "ciclo",
+  "invertido_rub",
+  "precio_usd_rub",
+  "comision_usdt",
+  "usdt_comprados",
+  "precio_usd_cup",
+  "comision_cup",
+];
+
+function nextNeed(stepIndex) {
+  return STEPS[stepIndex] || "done";
+}
 
 /* =========================
    ENDPOINTS
@@ -296,7 +263,7 @@ app.get("/api/cycles", (req, res) => {
 app.get("/api/cycles/:id", (req, res) => {
   try {
     const data = loadData();
-    const out = getCycleDetail(data, req.params.id);
+    const out = calcCycleDerived(data, req.params.id);
     if (!out.ok) return res.status(404).json(out);
     saveData(data);
     res.json(out);
@@ -306,9 +273,6 @@ app.get("/api/cycles/:id", (req, res) => {
   }
 });
 
-/* =========================
-   CHAT
-   ========================= */
 app.post("/api/chat", async (req, res) => {
   try {
     const message = (req.body?.message || "").trim();
@@ -317,94 +281,174 @@ app.post("/api/chat", async (req, res) => {
 
     if (!message) return res.status(400).json({ error: "Mensaje vacío" });
 
-    if (!WIZARD.has(sessionId)) WIZARD.set(sessionId, { step: 0, draft: {} });
+    if (!WIZARD.has(sessionId)) WIZARD.set(sessionId, { step: -1, draft: {} });
     const wiz = WIZARD.get(sessionId);
 
     const low = message.toLowerCase();
-    const startCycle = /(crear|nuevo|iniciar|abrir)\s+(un\s+)?ciclo/.test(low);
+    const start = /(crear|nuevo|iniciar|abrir)\s+(un\s+)?ciclo/.test(low);
     const cancel = /(cancelar|salir|stop|parar|terminar)/.test(low);
 
-    // Cancelar wizard
-    if (cancel && wiz.step > 0) {
+    // cancelar wizard
+    if (cancel && wiz.step >= 0) {
+      wiz.step = -1;
+      wiz.draft = {};
+      const reply = "Listo, lo cancelé. ¿Creamos otro ciclo o revisamos uno?";
+      const newHistory = [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: reply }];
+      return res.json({ reply, history: newHistory });
+    }
+
+    // iniciar wizard
+    if (start && wiz.step === -1) {
       wiz.step = 0;
       wiz.draft = {};
-      const reply = "Listo, cancelado.\nPróximo paso: ¿crear ciclo o añadir liberación?";
+      const need = nextNeed(wiz.step);
+      const reply = await elaraLine({ intent: "start", have: wiz.draft, need, userText: message });
       const newHistory = [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: reply }];
       return res.json({ reply, history: newHistory });
     }
 
-    // Iniciar wizard
-    if (startCycle && wiz.step === 0) {
-      wiz.step = 1;
-      wiz.draft = {};
-      const reply = "Perfecto.\n¿Qué número de ciclo es? (ej: 6)\nPróximo paso: dime el número.";
-      const newHistory = [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: reply }];
-      return res.json({ reply, history: newHistory });
-    }
+    // wizard activo
+    if (wiz.step >= 0) {
+      const need = nextNeed(wiz.step);
+      let note = "";
 
-    // Wizard activo: 1 dato por turno (corto y amable)
-    if (wiz.step > 0) {
-      const n = toNumber(message);
-
-      if (wiz.step === 1) {
-        if (!n) return res.json({ reply: "Solo el número del ciclo (ej: 6).\nPróximo paso: envíame el número." });
+      // 1) ciclo
+      if (need === "ciclo") {
+        const n = toNumber(message);
+        if (!n) {
+          const reply = await elaraLine({ intent: "ask", have: wiz.draft, need, userText: message });
+          return res.json({ reply });
+        }
         wiz.draft.ciclo = Math.trunc(n);
-        wiz.step = 2;
-        return res.json({ reply: `Ciclo ${wiz.draft.ciclo}, perfecto.\n¿Cuántos RUB invertiste? (ej: 11000)\nPróximo paso: dime el invertido.` });
+        wiz.step++;
+        const reply = await elaraLine({ intent: "ask", have: wiz.draft, need: nextNeed(wiz.step), userText: message });
+        return res.json({ reply });
       }
 
-      if (wiz.step === 2) {
-        if (n === null) return res.json({ reply: "¿Cuántos RUB invertiste? (ej: 11000)\nPróximo paso: envíame el monto." });
+      // 2) invertido_rub
+      if (need === "invertido_rub") {
+        const n = toNumber(message);
+        if (n === null) {
+          const reply = await elaraLine({ intent: "ask", have: wiz.draft, need, userText: message });
+          return res.json({ reply });
+        }
         wiz.draft.invertido_rub = n;
-        wiz.step = 3;
-        return res.json({ reply: "¿Precio USDT/RUB? (ej: 80)\nPróximo paso: dime el precio." });
+        wiz.step++;
+        const reply = await elaraLine({ intent: "ask", have: wiz.draft, need: nextNeed(wiz.step), userText: message });
+        return res.json({ reply });
       }
 
-      if (wiz.step === 3) {
-        if (n === null) return res.json({ reply: "Precio USDT/RUB, porfa (ej: 80).\nPróximo paso: envíame el precio." });
+      // 3) precio_usd_rub
+      if (need === "precio_usd_rub") {
+        const n = toNumber(message);
+        if (n === null || n <= 0) {
+          const reply = await elaraLine({ intent: "ask", have: wiz.draft, need, userText: message });
+          return res.json({ reply });
+        }
         wiz.draft.precio_usd_rub = n;
-        wiz.step = 4;
-        return res.json({ reply: "¿Comisión en USDT? (ej: 0,99)\nPróximo paso: dime la comisión." });
+        wiz.step++;
+        const reply = await elaraLine({ intent: "ask", have: wiz.draft, need: nextNeed(wiz.step), userText: message });
+        return res.json({ reply });
       }
 
-      if (wiz.step === 4) {
-        if (n === null) return res.json({ reply: "Comisión USDT (ej: 0,99).\nPróximo paso: envíame la comisión." });
+      // 4) comision_usdt
+      if (need === "comision_usdt") {
+        const n = toNumber(message);
+        if (n === null || n < 0) {
+          const reply = await elaraLine({ intent: "ask", have: wiz.draft, need, userText: message });
+          return res.json({ reply });
+        }
         wiz.draft.comision_usdt = n;
-        wiz.step = 5;
-        return res.json({ reply: "¿USDT comprados?\nSi no sabes, escribe: “calcula tú”.\nPróximo paso: dime los USDT." });
+        wiz.step++;
+        const reply = await elaraLine({ intent: "ask", have: wiz.draft, need: nextNeed(wiz.step), userText: message });
+        return res.json({ reply });
       }
 
-      if (wiz.step === 5) {
+      // 5) usdt_comprados (acepta “calcula tú”)
+      if (need === "usdt_comprados") {
         if (/calcula|estima|hazlo tu|tu calcula/i.test(message)) {
           const inv = toNumber(wiz.draft.invertido_rub);
           const px = toNumber(wiz.draft.precio_usd_rub);
           const fee = toNumber(wiz.draft.comision_usdt) || 0;
           if (inv !== null && px && px !== 0) {
             wiz.draft.usdt_comprados = round2(inv / px - fee);
-            wiz.step = 6;
-            return res.json({ reply: `Ok, estimo ~${wiz.draft.usdt_comprados} USDT.\n¿Precio USD/CUP? (ej: 562)\nPróximo paso: dime el USD/CUP.` });
+            note = `Calculé USDT aproximados: ${wiz.draft.usdt_comprados}`;
+            wiz.step++;
+            const reply = await elaraLine({
+              intent: "ask",
+              have: wiz.draft,
+              need: nextNeed(wiz.step),
+              userText: message,
+              note,
+            });
+            return res.json({ reply });
           }
-          return res.json({ reply: "Me falta invertido o precio USDT/RUB.\nPróximo paso: dime el dato que falta." });
+          const reply = await elaraLine({
+            intent: "ask",
+            have: wiz.draft,
+            need: "usdt_comprados",
+            userText: message,
+            note: "No puedo calcular sin invertido y precio USDT/RUB",
+          });
+          return res.json({ reply });
         }
 
-        const nn = toNumber(message);
-        if (nn === null) return res.json({ reply: "USDT comprados (ej: 136,51) o “calcula tú”.\nPróximo paso: envíame eso." });
-        wiz.draft.usdt_comprados = nn;
-        wiz.step = 6;
-        return res.json({ reply: "Perfecto.\n¿Precio USD/CUP? (ej: 562)\nPróximo paso: dime el USD/CUP." });
+        const n = toNumber(message);
+        if (n === null || n <= 0) {
+          const reply = await elaraLine({ intent: "ask", have: wiz.draft, need, userText: message });
+          return res.json({ reply });
+        }
+        wiz.draft.usdt_comprados = n;
+        wiz.step++;
+        const reply = await elaraLine({ intent: "ask", have: wiz.draft, need: nextNeed(wiz.step), userText: message });
+        return res.json({ reply });
       }
 
-      if (wiz.step === 6) {
-        if (n === null) return res.json({ reply: "Precio USD/CUP (ej: 562).\nPróximo paso: envíame el precio." });
+      // 6) precio_usd_cup
+      if (need === "precio_usd_cup") {
+        const n = toNumber(message);
+        if (n === null || n <= 0) {
+          const reply = await elaraLine({ intent: "ask", have: wiz.draft, need, userText: message });
+          return res.json({ reply });
+        }
         wiz.draft.precio_usd_cup = n;
-        wiz.step = 7;
-        return res.json({ reply: "¿Comisión en CUP? (ej: 2301,56)\nPróximo paso: dime la comisión CUP." });
+        wiz.step++;
+        const reply = await elaraLine({ intent: "ask", have: wiz.draft, need: nextNeed(wiz.step), userText: message });
+        return res.json({ reply });
       }
 
-      if (wiz.step === 7) {
-        if (n === null) return res.json({ reply: "Comisión CUP (ej: 2301,56).\nPróximo paso: envíame la comisión." });
-        wiz.draft.comision_cup = n;
+      // 7) comision_cup (acepta %)
+      if (need === "comision_cup") {
+        const p = percentFromText(message);
+        if (p !== null) {
+          const usdt = toNumber(wiz.draft.usdt_comprados);
+          const usdCup = toNumber(wiz.draft.precio_usd_cup);
+          if (usdt !== null && usdCup !== null) {
+            const cupBruto = round2(usdt * usdCup);
+            const comCup = round2(cupBruto * (p / 100));
+            wiz.draft.cup_bruto = cupBruto;
+            wiz.draft.comision_cup = comCup;
+            note = `Tomé ${p}% de CUP comprados. Comisión CUP: ${comCup}`;
+          } else {
+            const reply = await elaraLine({
+              intent: "ask",
+              have: wiz.draft,
+              need,
+              userText: message,
+              note: "Para calcular % necesito USDT comprados y USD/CUP",
+            });
+            return res.json({ reply });
+          }
+        } else {
+          const n = toNumber(message);
+          if (n === null || n < 0) {
+            const reply = await elaraLine({ intent: "ask", have: wiz.draft, need, userText: message });
+            return res.json({ reply });
+          }
+          wiz.draft.comision_cup = n;
+        }
 
+        // Crear ciclo final
         const data = loadData();
         const created = createCycle(data, {
           ciclo: wiz.draft.ciclo,
@@ -414,71 +458,86 @@ app.post("/api/chat", async (req, res) => {
           usdt_comprados: wiz.draft.usdt_comprados,
           precio_usd_cup: wiz.draft.precio_usd_cup,
           comision_cup: wiz.draft.comision_cup,
+          cup_bruto: wiz.draft.cup_bruto,
         });
+
         saveData(data);
 
-        wiz.step = 0;
+        // reset wizard
+        wiz.step = -1;
         wiz.draft = {};
 
         if (!created.ok) {
-          return res.json({ reply: `No pude crear el ciclo: ${created.error}.\nPróximo paso: dime qué dato corriges.` });
+          const reply = oneLine(`No pude crearlo: ${created.error}. ¿Lo intentamos otra vez?`);
+          const newHistory = [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: reply }];
+          return res.json({ reply, history: newHistory });
         }
 
-        return res.json({ reply: `Listo ✅ Ciclo ${created.cycle.ciclo} creado.\nPróximo paso: ¿añadimos una liberación?` });
+        const reply = await elaraLine({
+          intent: "done",
+          have: { ciclo: created.cycle.ciclo },
+          need: "done",
+          userText: message,
+          note: note || "Ciclo creado",
+        });
+
+        const safeReply = reply || oneLine(`Listo, ciclo ${created.cycle.ciclo} creado. ¿Añadimos una liberación?`);
+        const newHistory = [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: safeReply }];
+        return res.json({ reply: safeReply, history: newHistory });
       }
     }
 
     /* =========================
-       MODO NORMAL (IA)
-       - Responde corto y amable
-       - NO muestra comandos
+       MODO NORMAL (CHAT CORTO)
+       Aquí solo respondemos, sin ejecutar “acciones”.
+       (Si luego quieres tools reales aquí también, lo montamos)
        ========================= */
     const data = loadData();
     for (const id of Object.keys(data.cycles)) calcCycleDerived(data, id);
     saveData(data);
 
-    const cyclesCompact = listCycles(data).slice(-12).map((c) => ({
+    const cyclesCompact = listCycles(data).slice(-10).map((c) => ({
       ciclo: c.ciclo,
       estado: c.estado,
-      rub_invertidos: c.invertido_rub,
+      invertido: c.invertido_rub,
       cup_disponibles: c.cup_libres,
-      cup_liberados: c.cup_liberados,
       cup_pendientes: c.cup_pendientes,
-      rub_recibidos: c.rub_recibidos,
       ganancia_rub: c.ganancia_rub,
       porcentaje: c.porcentaje,
     }));
 
-    const input = [
-      ...history.slice(-10),
-      {
-        role: "user",
-        content:
-          `Usuario: ${message}\n` +
-          `Ciclos resumen: ${JSON.stringify(cyclesCompact)}\n` +
-          `Responde corto, sin tecnicismos. Si falta info, pregunta 1 cosa.`,
-      },
-    ];
+    const fallback = "Dime qué quieres hacer: crear ciclo, ver estado o añadir liberación.";
 
-    const ai = await client.responses.create({
+    if (!client) {
+      const reply = fallback;
+      const newHistory = [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: reply }];
+      return res.json({ reply, history: newHistory });
+    }
+
+    const normalInstructions = `
+Eres ELARA. Responde en 1 línea, amable y directa.
+No uses párrafos. No uses "Próximo paso".
+Si falta info, pregunta 1 cosa.
+No menciones JSON, comandos ni variables.
+`.trim();
+
+    const input =
+      `Usuario: "${message}"\n` +
+      `Ciclos: ${JSON.stringify(cyclesCompact)}\n` +
+      `Responde breve y útil.`;
+
+    const r = await client.responses.create({
       model: "gpt-5-mini",
-      instructions: SYSTEM_RULES,
+      instructions: normalInstructions,
       input,
-      // Mantiene cortito
-      max_output_tokens: 200,
+      max_output_tokens: 140,
     });
 
-    let reply = clampText(ai.output_text || "");
-    if (!reply) reply = "Entendido.\nPróximo paso: dime qué quieres hacer (crear ciclo / liberar CUP / ver estado).";
-    if (!/Próximo paso:/i.test(reply)) reply = `${reply}\nPróximo paso: dime qué quieres hacer.`;
+    let reply = oneLine(r.output_text || "");
+    if (!reply) reply = fallback;
 
-    const newHistory = [
-      ...history.slice(-12),
-      { role: "user", content: message },
-      { role: "assistant", content: reply },
-    ];
-
-    res.json({ reply, history: newHistory });
+    const newHistory = [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: reply }];
+    return res.json({ reply, history: newHistory });
   } catch (e) {
     console.error("CHAT ERROR:", e);
     res.status(500).json({ error: "Error en /api/chat" });
