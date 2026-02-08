@@ -1,6 +1,7 @@
 const chatBody = document.getElementById("chatBody");
 const chatInput = document.getElementById("chatInput");
 const sendBtn = document.getElementById("sendBtn");
+const voiceBtn = document.getElementById("voiceBtn");
 
 const cyclesList = document.getElementById("cyclesList");
 
@@ -45,49 +46,155 @@ function renderCycles() {
     btn.innerHTML = `<div><span>Ciclo ${c.id}:</span> <b>${c.label}</b></div><div class="chev">›</div>`;
     btn.addEventListener("click", () => {
       messages.push({ from: "user", text: `Abre el ciclo ${c.id}` });
-      messages.push({ from: "ai", text: `Listo. Mostrando detalles del ciclo ${c.id} (demo).` });
-      renderMessages();
+      pushAiMessage(`Listo. Mostrando detalles del ciclo ${c.id} (demo).`);
     });
     cyclesList.appendChild(btn);
   }
 }
 
-function send() {
-  const text = (chatInput.value || "").trim();
-  if (!text) return;
-  messages.push({ from: "user", text });
-  chatInput.value = "";
+/* ===== ELARA Demo Brain (por ahora sin DB/IA real) ===== */
+function elaraDemoReply(userText) {
+  const t = (userText || "").toLowerCase();
 
-  // Respuesta demo (luego la conectamos a ELARA real)
-  messages.push({
-    from: "ai",
-    text: "Recibido. (Demo) Cuando conectemos ELARA, esto ejecutará acciones reales en ciclos.",
-  });
+  if (t.includes("estado")) return "Ciclo actual: en progreso. Avance 75 por ciento.";
+  if (t.includes("resumen")) return "Resumen del ciclo actual: 72 mil rublos movidos y ganancia neta de 4 mil 250.";
+  if (t.includes("historial")) return "Historial: tengo ciclos recientes listados a la derecha. Dime cuál quieres abrir.";
+  if (t.includes("ganancia")) return "En demo: la ganancia neta del ciclo actual es 4 mil 250 rublos.";
+  if (t.includes("reporte")) return "Reporte demo generado. Después lo exportamos a PDF o Excel.";
+  if (t.includes("crear ciclo") || t.includes("nuevo ciclo"))
+    return "Perfecto. Dime cliente, monto en rublos y tasa. Por ahora lo registro como demo.";
 
-  renderMessages();
+  return "Te escucho. Dime qué quieres hacer con los ciclos: crear, ver historial, abrir un ciclo o generar reporte.";
 }
 
-sendBtn.addEventListener("click", send);
+/* ===== Text-to-Speech (ELARA habla) ===== */
+function speak(text) {
+  if (!("speechSynthesis" in window)) return;
+
+  // evita solaparse
+  window.speechSynthesis.cancel();
+
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "es-ES";
+  u.rate = 1.0;
+  u.pitch = 1.0;
+  u.volume = 1.0;
+
+  window.speechSynthesis.speak(u);
+}
+
+function pushAiMessage(text) {
+  messages.push({ from: "ai", text });
+  renderMessages();
+  speak(text);
+}
+
+/* ===== Enviar texto normal ===== */
+function sendText() {
+  const text = (chatInput.value || "").trim();
+  if (!text) return;
+
+  messages.push({ from: "user", text });
+  chatInput.value = "";
+  renderMessages();
+
+  const reply = elaraDemoReply(text);
+  pushAiMessage(reply);
+}
+
+sendBtn.addEventListener("click", sendText);
 chatInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") send();
+  if (e.key === "Enter") sendText();
 });
 
+/* ===== Chips rápidas ===== */
 document.querySelectorAll(".pill").forEach((b) => {
   b.addEventListener("click", () => {
     const action = b.getAttribute("data-action");
+
     if (action === "estado") {
       messages.push({ from: "user", text: "Estado actual" });
-      messages.push({ from: "ai", text: "Ciclo actual: En Progreso (75%)." });
-    } else if (action === "resumen") {
-      messages.push({ from: "user", text: "Resumen del ciclo" });
-      messages.push({ from: "ai", text: "Resumen (demo): RUB movido 72 000₽, ganancia +4 250₽." });
-    } else {
-      messages.push({ from: "user", text: "Generar reporte" });
-      messages.push({ from: "ai", text: "Reporte (demo) generado. Luego lo exportamos a PDF/Excel." });
+      pushAiMessage("Ciclo actual: En Progreso. Avance 75 por ciento.");
+      return;
     }
-    renderMessages();
+
+    if (action === "resumen") {
+      messages.push({ from: "user", text: "Resumen del ciclo" });
+      pushAiMessage("Resumen demo: 72 mil rublos movidos y ganancia neta de 4 mil 250.");
+      return;
+    }
+
+    messages.push({ from: "user", text: "Generar reporte" });
+    pushAiMessage("Reporte demo generado. Luego lo exportamos a PDF o Excel.");
   });
 });
 
+/* ===== Voice: Speech-to-Text ===== */
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let isRecording = false;
+
+function startVoice() {
+  if (!SpeechRecognition) {
+    alert("Tu navegador no soporta reconocimiento de voz. Usa Chrome o Edge.");
+    return;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.lang = "es-ES";
+  recognition.interimResults = true;
+  recognition.continuous = false;
+
+  isRecording = true;
+  voiceBtn.classList.add("rec");
+  voiceBtn.textContent = "⏺️";
+
+  let finalText = "";
+
+  recognition.onresult = (event) => {
+    let interim = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const chunk = event.results[i][0].transcript;
+      if (event.results[i].isFinal) finalText += chunk;
+      else interim += chunk;
+    }
+    chatInput.value = (finalText || interim).trim();
+  };
+
+  recognition.onerror = () => stopVoice();
+
+  recognition.onend = () => {
+    // al terminar, enviamos lo que quedó
+    const text = (chatInput.value || "").trim();
+    stopVoice();
+    if (text) {
+      messages.push({ from: "user", text });
+      chatInput.value = "";
+      renderMessages();
+
+      const reply = elaraDemoReply(text);
+      pushAiMessage(reply);
+    }
+  };
+
+  recognition.start();
+}
+
+function stopVoice() {
+  isRecording = false;
+  voiceBtn.classList.remove("rec");
+  voiceBtn.textContent = "🎙️";
+  if (recognition) {
+    try { recognition.stop(); } catch {}
+    recognition = null;
+  }
+}
+
+voiceBtn.addEventListener("click", () => {
+  if (isRecording) stopVoice();
+  else startVoice();
+});
+
+/* ===== Init ===== */
 renderMessages();
 renderCycles();
