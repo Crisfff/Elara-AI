@@ -11,7 +11,7 @@ app.use(express.static("public"));
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /* =========================
-   PERSISTENCIA (data.json)
+   DATA (data.json)
    ========================= */
 const DATA_PATH = path.resolve(process.cwd(), "data.json");
 
@@ -37,20 +37,17 @@ function ensureDataFile() {
     );
   }
 }
-
 function loadData() {
   ensureDataFile();
-  const raw = fs.readFileSync(DATA_PATH, "utf-8");
-  return JSON.parse(raw);
+  return JSON.parse(fs.readFileSync(DATA_PATH, "utf-8"));
 }
-
 function saveData(data) {
   data.meta.updated_at = new Date().toISOString();
   fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), "utf-8");
 }
 
 /* =========================
-   HELPERS / NUMEROS
+   HELPERS
    ========================= */
 function toNumber(x) {
   if (x === null || x === undefined) return null;
@@ -59,14 +56,47 @@ function toNumber(x) {
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }
-
 function round2(n) {
   if (!Number.isFinite(n)) return n;
   return Math.round(n * 100) / 100;
 }
+function clampText(s) {
+  // Limpia cualquier cosa “tipo comando” o JSON que se cuele
+  if (!s) return "";
+  let t = String(s).trim();
+
+  // si por error devolvió un JSON completo, intentamos sacar "say"
+  if (t.startsWith("{") && t.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(t);
+      if (parsed?.say) t = String(parsed.say);
+    } catch {}
+  }
+
+  // quita líneas raras tipo actions/type/data o llaves
+  t = t
+    .split("\n")
+    .filter((line) => {
+      const l = line.trim().toLowerCase();
+      if (!l) return false;
+      if (l.includes('"actions"') || l.includes('"type"') || l.includes('"data"')) return false;
+      if (l.startsWith("{") || l.startsWith("}")) return false;
+      if (l.startsWith("[") || l.startsWith("]")) return false;
+      return true;
+    })
+    .join("\n")
+    .trim();
+
+  // Limita a respuestas cortas (no párrafos)
+  const lines = t.split("\n").map((x) => x.trim()).filter(Boolean);
+  if (lines.length > 5) t = lines.slice(0, 5).join("\n");
+  if (t.length > 450) t = t.slice(0, 450).trim();
+
+  return t;
+}
 
 /* =========================
-   REGLAS DE CICLO (DERIVADOS)
+   REGLAS (DERIVADOS)
    ========================= */
 function calcCycleDerived(data, cycleId) {
   const id = String(cycleId);
@@ -75,67 +105,52 @@ function calcCycleDerived(data, cycleId) {
 
   const libs = data.liberaciones.filter((l) => String(l.ciclo) === id);
 
-  const cupLiberados = libs.reduce(
-    (acc, l) => acc + (toNumber(l.cup_liberados) || 0),
-    0
-  );
-  const rubRecibidos = libs.reduce(
-    (acc, l) => acc + (toNumber(l.rub_recibidos) || 0),
-    0
-  );
+  const cupLiberados = libs.reduce((acc, l) => acc + (toNumber(l.cup_liberados) || 0), 0);
+  const rubRecibidos = libs.reduce((acc, l) => acc + (toNumber(l.rub_recibidos) || 0), 0);
 
   cycle.cup_liberados = round2(cupLiberados);
   cycle.rub_recibidos = round2(rubRecibidos);
 
   const cupLibres = toNumber(cycle.cup_libres);
-  cycle.cup_pendientes =
-    cupLibres !== null ? round2(cupLibres - cupLiberados) : null;
+  cycle.cup_pendientes = cupLibres !== null ? round2(cupLibres - cupLiberados) : null;
 
   const invertido = toNumber(cycle.invertido_rub);
   if (invertido !== null) {
     cycle.ganancia_rub = round2(rubRecibidos - invertido);
-    cycle.porcentaje =
-      invertido !== 0 ? round2((cycle.ganancia_rub / invertido) * 100) : null;
+    cycle.porcentaje = invertido !== 0 ? round2((cycle.ganancia_rub / invertido) * 100) : null;
   } else {
     cycle.ganancia_rub = null;
     cycle.porcentaje = null;
   }
 
-  // Estado
   if (cycle.cup_pendientes === null) cycle.estado = "Pendiente";
   else if (cycle.cup_pendientes <= 0) cycle.estado = "Cerrado";
   else cycle.estado = "En Progreso";
 
-  // Alertas
   const alerts = [];
-  if (cycle.cup_pendientes !== null && cycle.cup_pendientes < -1) {
-    alerts.push("CUP pendientes negativo: revisa CUP disponibles o liberaciones.");
-  }
-  if (invertido !== null && cycle.ganancia_rub !== null && cycle.ganancia_rub < -1) {
-    alerts.push("Ganancia negativa: revisa RUB recibidos o invertido.");
-  }
+  if (cycle.cup_pendientes !== null && cycle.cup_pendientes < -1) alerts.push("Pendientes negativos. Revisa datos.");
+  if (invertido !== null && cycle.ganancia_rub !== null && cycle.ganancia_rub < -1) alerts.push("Ganancia negativa. Revisa datos.");
   cycle.alertas = alerts;
 
   return { ok: true, cycle, liberaciones: libs };
 }
 
 /* =========================
-   “TOOLS” (ACCIONES REALES)
+   ACTIONS (internas)
    ========================= */
 function listCycles(data) {
   return Object.values(data.cycles).sort((a, b) => (a.ciclo || 0) - (b.ciclo || 0));
 }
-
 function getCycleDetail(data, ciclo) {
   return calcCycleDerived(data, String(ciclo));
 }
 
 function createCycle(data, payload) {
   const id = String(payload.ciclo);
-  if (!id || id === "undefined") return { ok: false, error: "ciclo inválido" };
-  if (data.cycles[id]) return { ok: false, error: `El ciclo ${id} ya existe.` };
+  if (!id || id === "undefined") return { ok: false, error: "Ciclo inválido" };
+  if (data.cycles[id]) return { ok: false, error: `El ciclo ${id} ya existe` };
 
-  // Obligatorios para tu ciclo completo
+  // Campos obligatorios del ciclo completo (tu Excel)
   const required = [
     "ciclo",
     "invertido_rub",
@@ -145,10 +160,9 @@ function createCycle(data, payload) {
     "precio_usd_cup",
     "comision_cup",
   ];
-
   for (const k of required) {
     if (payload[k] === undefined || payload[k] === null || payload[k] === "") {
-      return { ok: false, error: `Falta dato obligatorio: ${k}` };
+      return { ok: false, error: `Falta dato: ${k}` };
     }
   }
 
@@ -160,7 +174,6 @@ function createCycle(data, payload) {
     usdt_comprados: toNumber(payload.usdt_comprados),
     precio_usd_cup: toNumber(payload.precio_usd_cup),
 
-    // estos 3 los puedes llenar luego si quieres (Excel full)
     cup_bruto: toNumber(payload.cup_bruto),
     comision_cup: toNumber(payload.comision_cup),
     cup_libres: toNumber(payload.cup_libres),
@@ -176,11 +189,9 @@ function createCycle(data, payload) {
     updated_at: new Date().toISOString(),
   };
 
-  // Si no viene CUP disponibles pero viene CUP bruto y comisión CUP, calcúlalo
-  const cupBruto = toNumber(payload.cup_bruto);
-  const comCUP = toNumber(payload.comision_cup);
-  if (cycle.cup_libres === null && cupBruto !== null && comCUP !== null) {
-    cycle.cup_libres = round2(cupBruto - comCUP);
+  // Si hay CUP bruto y comisión CUP, calcula CUP disponibles
+  if (cycle.cup_libres === null && cycle.cup_bruto !== null && cycle.comision_cup !== null) {
+    cycle.cup_libres = round2(cycle.cup_bruto - cycle.comision_cup);
   }
 
   data.cycles[id] = cycle;
@@ -209,7 +220,6 @@ function updateCycle(data, payload) {
     if (payload[k] !== undefined) cycle[k] = toNumber(payload[k]);
   }
 
-  // Si CUP disponibles no viene pero bruto y comisión sí, calcúlalo
   if (cycle.cup_libres === null && cycle.cup_bruto !== null && cycle.comision_cup !== null) {
     cycle.cup_libres = round2(cycle.cup_bruto - cycle.comision_cup);
   }
@@ -229,7 +239,6 @@ function addLiberacion(data, payload) {
 
   if (cup === null) return { ok: false, error: "Falta CUP liberados" };
 
-  // Si no trae RUB y hay tasa, estimamos
   if (rub === null && tasa !== null && tasa !== 0) {
     rub = round2(cup / tasa);
   }
@@ -252,26 +261,19 @@ function addLiberacion(data, payload) {
 }
 
 /* =========================
-   WIZARD (MODO 2) CON ESTADO
+   WIZARD MODO 2 (crear ciclo)
    ========================= */
-const WIZARD = new Map(); // sessionId => { step, draft }
+const WIZARD = new Map(); // sessionId => {step, draft}
 
 /* =========================
-   PROMPT ELARA (HUMANA)
+   ELARA PROMPT (corto, amable, directo)
    ========================= */
 const SYSTEM_RULES = `
-Eres ELARA, asistente femenina premium para gestionar ciclos de remesas (RUB↔CUP).
-Tono: cálido, claro, cero robot. Hablas como una asistente humana.
-No muestres nombres internos de variables/columnas.
-
-REGLAS:
-- No inventes números. Si falta algo, pregunta 1 cosa concreta con ejemplo corto.
-- Si el usuario dice “calcula tú”, calcula lo posible y confirma (sin inventar lo que no se pueda).
-- Termina con: "Próximo paso: ..."
-
-FORMATO:
-Responde SIEMPRE en JSON válido:
-{ "say": "...", "actions": [ ... ] }
+Eres ELARA. Responde SIEMPRE corto: 1 a 3 líneas. Máximo 5 bullets.
+Tono: amable, directo, profesional. Cero párrafos.
+Prohibido mostrar JSON, comandos o nombres técnicos. No digas "actions", "type", "data".
+Si falta un dato: pregunta SOLO 1 cosa y da un ejemplo.
+Siempre termina con: "Próximo paso: ...".
 `.trim();
 
 /* =========================
@@ -304,6 +306,9 @@ app.get("/api/cycles/:id", (req, res) => {
   }
 });
 
+/* =========================
+   CHAT
+   ========================= */
 app.post("/api/chat", async (req, res) => {
   try {
     const message = (req.body?.message || "").trim();
@@ -312,142 +317,96 @@ app.post("/api/chat", async (req, res) => {
 
     if (!message) return res.status(400).json({ error: "Mensaje vacío" });
 
-    if (!WIZARD.has(sessionId)) WIZARD.set(sessionId, { draft: {}, step: 0 });
+    if (!WIZARD.has(sessionId)) WIZARD.set(sessionId, { step: 0, draft: {} });
     const wiz = WIZARD.get(sessionId);
 
-    const user = message.toLowerCase();
-    const isNewCycleIntent = /(crear|nuevo|iniciar|abrir)\s+(un\s+)?ciclo/.test(user);
-    const isCancel = /(cancelar|salir|stop|parar|terminar)\b/.test(user);
+    const low = message.toLowerCase();
+    const startCycle = /(crear|nuevo|iniciar|abrir)\s+(un\s+)?ciclo/.test(low);
+    const cancel = /(cancelar|salir|stop|parar|terminar)/.test(low);
 
     // Cancelar wizard
-    if (isCancel && wiz.step > 0) {
-      wiz.draft = {};
+    if (cancel && wiz.step > 0) {
       wiz.step = 0;
-      const reply =
-        "Listo, cancelé la creación del ciclo. Próximo paso: dime si quieres crear uno nuevo o revisar un ciclo existente.";
-      return res.json({
-        reply,
-        history: [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: reply }],
-      });
+      wiz.draft = {};
+      const reply = "Listo, cancelado.\nPróximo paso: ¿crear ciclo o añadir liberación?";
+      const newHistory = [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: reply }];
+      return res.json({ reply, history: newHistory });
     }
 
     // Iniciar wizard
-    if (isNewCycleIntent && wiz.step === 0) {
-      wiz.draft = {};
+    if (startCycle && wiz.step === 0) {
       wiz.step = 1;
-      const reply =
-        "Perfecto. Vamos suave 😄 ¿Qué número de ciclo es? (ej: 6)\nPróximo paso: dime el número.";
-      return res.json({
-        reply,
-        history: [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: reply }],
-      });
+      wiz.draft = {};
+      const reply = "Perfecto.\n¿Qué número de ciclo es? (ej: 6)\nPróximo paso: dime el número.";
+      const newHistory = [...history.slice(-12), { role: "user", content: message }, { role: "assistant", content: reply }];
+      return res.json({ reply, history: newHistory });
     }
 
-    // Wizard activo: 1 dato por turno
+    // Wizard activo: 1 dato por turno (corto y amable)
     if (wiz.step > 0) {
       const n = toNumber(message);
 
-      // 1) ciclo
       if (wiz.step === 1) {
-        if (!n) {
-          const reply = "Dime solo el número del ciclo (ej: 6).\nPróximo paso: envíame el número.";
-          return res.json({ reply });
-        }
+        if (!n) return res.json({ reply: "Solo el número del ciclo (ej: 6).\nPróximo paso: envíame el número." });
         wiz.draft.ciclo = Math.trunc(n);
         wiz.step = 2;
-        const reply = `Perfecto, ciclo ${wiz.draft.ciclo}. ¿Cuántos RUB invertiste? (ej: 11000)\nPróximo paso: dime el invertido.`;
-        return res.json({ reply });
+        return res.json({ reply: `Ciclo ${wiz.draft.ciclo}, perfecto.\n¿Cuántos RUB invertiste? (ej: 11000)\nPróximo paso: dime el invertido.` });
       }
 
-      // 2) invertido
       if (wiz.step === 2) {
-        if (n === null) {
-          const reply = "¿Cuántos RUB invertiste? Solo número (ej: 11000).\nPróximo paso: envíame el monto.";
-          return res.json({ reply });
-        }
+        if (n === null) return res.json({ reply: "¿Cuántos RUB invertiste? (ej: 11000)\nPróximo paso: envíame el monto." });
         wiz.draft.invertido_rub = n;
         wiz.step = 3;
-        const reply = "¿A qué precio compraste el USDT en RUB? (ej: 80)\nPróximo paso: dime el precio USDT/RUB.";
-        return res.json({ reply });
+        return res.json({ reply: "¿Precio USDT/RUB? (ej: 80)\nPróximo paso: dime el precio." });
       }
 
-      // 3) precio usdt/rub
       if (wiz.step === 3) {
-        if (n === null) {
-          const reply = "Dime el precio USDT/RUB (ej: 80).\nPróximo paso: envíame ese precio.";
-          return res.json({ reply });
-        }
+        if (n === null) return res.json({ reply: "Precio USDT/RUB, porfa (ej: 80).\nPróximo paso: envíame el precio." });
         wiz.draft.precio_usd_rub = n;
         wiz.step = 4;
-        const reply = "¿Cuál fue la comisión en USDT? (ej: 0,99)\nPróximo paso: dime la comisión USDT.";
-        return res.json({ reply });
+        return res.json({ reply: "¿Comisión en USDT? (ej: 0,99)\nPróximo paso: dime la comisión." });
       }
 
-      // 4) comisión usdt
       if (wiz.step === 4) {
-        if (n === null) {
-          const reply = "Dime la comisión USDT (ej: 0,99).\nPróximo paso: envíame la comisión.";
-          return res.json({ reply });
-        }
+        if (n === null) return res.json({ reply: "Comisión USDT (ej: 0,99).\nPróximo paso: envíame la comisión." });
         wiz.draft.comision_usdt = n;
         wiz.step = 5;
-        const reply =
-          "¿Cuántos USDT compraste? Si no sabes exacto, escribe “calcula tú” y lo estimo.\nPróximo paso: dime los USDT.";
-        return res.json({ reply });
+        return res.json({ reply: "¿USDT comprados?\nSi no sabes, escribe: “calcula tú”.\nPróximo paso: dime los USDT." });
       }
 
-      // 5) usdt comprados (acepta calcula tú)
       if (wiz.step === 5) {
-        if (/calcula|estima|tu calcula|hazlo tu/i.test(message)) {
+        if (/calcula|estima|hazlo tu|tu calcula/i.test(message)) {
           const inv = toNumber(wiz.draft.invertido_rub);
           const px = toNumber(wiz.draft.precio_usd_rub);
           const fee = toNumber(wiz.draft.comision_usdt) || 0;
           if (inv !== null && px && px !== 0) {
-            const est = round2(inv / px - fee);
-            wiz.draft.usdt_comprados = est;
+            wiz.draft.usdt_comprados = round2(inv / px - fee);
             wiz.step = 6;
-            const reply =
-              `Listo. Estimo ~${est} USDT (incluyendo comisión). ¿A qué precio está el USD/CUP? (ej: 562)\nPróximo paso: dime el USD/CUP.`;
-            return res.json({ reply });
+            return res.json({ reply: `Ok, estimo ~${wiz.draft.usdt_comprados} USDT.\n¿Precio USD/CUP? (ej: 562)\nPróximo paso: dime el USD/CUP.` });
           }
-          const reply =
-            "Puedo estimarlo, pero me falta algo (invertido o precio USDT/RUB).\nPróximo paso: dime el dato que falta.";
-          return res.json({ reply });
+          return res.json({ reply: "Me falta invertido o precio USDT/RUB.\nPróximo paso: dime el dato que falta." });
         }
 
-        if (n === null) {
-          const reply =
-            "Dime los USDT comprados (ej: 136,51) o escribe “calcula tú”.\nPróximo paso: envíame ese dato.";
-          return res.json({ reply });
-        }
-        wiz.draft.usdt_comprados = n;
+        const nn = toNumber(message);
+        if (nn === null) return res.json({ reply: "USDT comprados (ej: 136,51) o “calcula tú”.\nPróximo paso: envíame eso." });
+        wiz.draft.usdt_comprados = nn;
         wiz.step = 6;
-        const reply = "Perfecto. ¿A qué precio está el USD/CUP? (ej: 562)\nPróximo paso: dime el USD/CUP.";
-        return res.json({ reply });
+        return res.json({ reply: "Perfecto.\n¿Precio USD/CUP? (ej: 562)\nPróximo paso: dime el USD/CUP." });
       }
 
-      // 6) precio usd/cup
       if (wiz.step === 6) {
-        if (n === null) {
-          const reply = "Dime el precio USD/CUP (ej: 562).\nPróximo paso: envíame ese precio.";
-          return res.json({ reply });
-        }
+        if (n === null) return res.json({ reply: "Precio USD/CUP (ej: 562).\nPróximo paso: envíame el precio." });
         wiz.draft.precio_usd_cup = n;
         wiz.step = 7;
-        const reply = "¿Cuál fue la comisión en CUP? (ej: 2301,56)\nPróximo paso: dime la comisión CUP.";
-        return res.json({ reply });
+        return res.json({ reply: "¿Comisión en CUP? (ej: 2301,56)\nPróximo paso: dime la comisión CUP." });
       }
 
-      // 7) comisión cup => crear ciclo
       if (wiz.step === 7) {
-        if (n === null) {
-          const reply = "Dime la comisión CUP (ej: 2301,56).\nPróximo paso: envíame la comisión.";
-          return res.json({ reply });
-        }
+        if (n === null) return res.json({ reply: "Comisión CUP (ej: 2301,56).\nPróximo paso: envíame la comisión." });
         wiz.draft.comision_cup = n;
 
         const data = loadData();
-        const payload = {
+        const created = createCycle(data, {
           ciclo: wiz.draft.ciclo,
           invertido_rub: wiz.draft.invertido_rub,
           precio_usd_rub: wiz.draft.precio_usd_rub,
@@ -455,54 +414,49 @@ app.post("/api/chat", async (req, res) => {
           usdt_comprados: wiz.draft.usdt_comprados,
           precio_usd_cup: wiz.draft.precio_usd_cup,
           comision_cup: wiz.draft.comision_cup,
-        };
-
-        const created = createCycle(data, payload);
+        });
         saveData(data);
 
-        // reset wizard
-        wiz.draft = {};
         wiz.step = 0;
+        wiz.draft = {};
 
         if (!created.ok) {
-          const reply = `No pude crear el ciclo: ${created.error}.\nPróximo paso: dime qué dato quieres corregir.`;
-          return res.json({ reply });
+          return res.json({ reply: `No pude crear el ciclo: ${created.error}.\nPróximo paso: dime qué dato corriges.` });
         }
 
-        const reply =
-          `Listo, ciclo ${payload.ciclo} creado ✅.\nPróximo paso: ¿añadimos una liberación? (CUP liberados + tasa RUB/CUP + RUB recibidos)`;
-        return res.json({ reply });
+        return res.json({ reply: `Listo ✅ Ciclo ${created.cycle.ciclo} creado.\nPróximo paso: ¿añadimos una liberación?` });
       }
     }
 
     /* =========================
-       MODO AI NORMAL (SIN WIZARD)
+       MODO NORMAL (IA)
+       - Responde corto y amable
+       - NO muestra comandos
        ========================= */
     const data = loadData();
+    for (const id of Object.keys(data.cycles)) calcCycleDerived(data, id);
+    saveData(data);
 
-    // Contexto compacto (últimos 15)
-    const cyclesCompact = listCycles(data)
-      .slice(-15)
-      .map((c) => ({
-        ciclo: c.ciclo,
-        estado: c.estado,
-        invertido_rub: c.invertido_rub,
-        cup_disponibles: c.cup_libres,
-        cup_liberados: c.cup_liberados,
-        cup_pendientes: c.cup_pendientes,
-        rub_recibidos: c.rub_recibidos,
-        ganancia_rub: c.ganancia_rub,
-        porcentaje: c.porcentaje,
-      }));
+    const cyclesCompact = listCycles(data).slice(-12).map((c) => ({
+      ciclo: c.ciclo,
+      estado: c.estado,
+      rub_invertidos: c.invertido_rub,
+      cup_disponibles: c.cup_libres,
+      cup_liberados: c.cup_liberados,
+      cup_pendientes: c.cup_pendientes,
+      rub_recibidos: c.rub_recibidos,
+      ganancia_rub: c.ganancia_rub,
+      porcentaje: c.porcentaje,
+    }));
 
     const input = [
       ...history.slice(-10),
       {
         role: "user",
         content:
-          `Mensaje: ${message}\n\n` +
-          `Resumen ciclos (últimos): ${JSON.stringify(cyclesCompact)}\n\n` +
-          `Si quieres ejecutar algo real, devuelve actions: create_cycle, update_cycle, add_liberacion, get_cycle, list_cycles.`,
+          `Usuario: ${message}\n` +
+          `Ciclos resumen: ${JSON.stringify(cyclesCompact)}\n` +
+          `Responde corto, sin tecnicismos. Si falta info, pregunta 1 cosa.`,
       },
     ];
 
@@ -510,44 +464,13 @@ app.post("/api/chat", async (req, res) => {
       model: "gpt-5-mini",
       instructions: SYSTEM_RULES,
       input,
+      // Mantiene cortito
+      max_output_tokens: 200,
     });
 
-    const raw = (ai.output_text || "").trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      parsed = { say: raw || "No pude interpretar eso.", actions: [] };
-    }
-
-    const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
-    const results = [];
-
-    for (const act of actions) {
-      const type = act?.type;
-      const d = act?.data || {};
-
-      if (type === "create_cycle") results.push({ type, result: createCycle(data, d) });
-      else if (type === "update_cycle") results.push({ type, result: updateCycle(data, d) });
-      else if (type === "add_liberacion") results.push({ type, result: addLiberacion(data, d) });
-      else if (type === "get_cycle") results.push({ type, result: getCycleDetail(data, d.ciclo) });
-      else if (type === "list_cycles") results.push({ type, result: { ok: true, cycles: listCycles(data) } });
-      else results.push({ type, result: { ok: false, error: "Acción no soportada" } });
-    }
-
-    // Recalcular todo por seguridad
-    for (const id of Object.keys(data.cycles)) calcCycleDerived(data, id);
-    saveData(data);
-
-    let extra = "";
-    if (results.length) {
-      const okCount = results.filter((r) => r.result?.ok).length;
-      const badCount = results.length - okCount;
-      extra = `\n(Ejecución: ${okCount} OK${badCount ? `, ${badCount} error` : ""})`;
-    }
-
-    const reply = `${(parsed.say || "Listo.").trim()}${extra}`.trim();
+    let reply = clampText(ai.output_text || "");
+    if (!reply) reply = "Entendido.\nPróximo paso: dime qué quieres hacer (crear ciclo / liberar CUP / ver estado).";
+    if (!/Próximo paso:/i.test(reply)) reply = `${reply}\nPróximo paso: dime qué quieres hacer.`;
 
     const newHistory = [
       ...history.slice(-12),
@@ -555,7 +478,7 @@ app.post("/api/chat", async (req, res) => {
       { role: "assistant", content: reply },
     ];
 
-    res.json({ reply, history: newHistory, results });
+    res.json({ reply, history: newHistory });
   } catch (e) {
     console.error("CHAT ERROR:", e);
     res.status(500).json({ error: "Error en /api/chat" });
