@@ -1,16 +1,17 @@
+/* =========================
+   ELEMENTOS BASE (CHAT UI)
+   ========================= */
 const chatBody = document.getElementById("chatBody");
 const chatInput = document.getElementById("chatInput");
 const sendBtn = document.getElementById("sendBtn");
 const voiceBtn = document.getElementById("voiceBtn");
-
 const cyclesList = document.getElementById("cyclesList");
 
 const messages = [
   { from: "user", text: "Hola! ¿Cuál es el estado actual del ciclo?" },
   { from: "ai", text: "El ciclo actual está en progreso. ¿Necesitas algún reporte?" },
   { from: "user", text: "Sí, ¿puedes mostrarme el resumen del ciclo?" },
-  { from: "ai", text: "Claro, aquí tienes el resumen del ciclo actual..." },
-  { from: "user", text: "Gracias, se ve bien." },
+  { from: "ai", text: "Claro, aquí tienes el resumen del ciclo actual..." }
 ];
 
 const cycles = [
@@ -46,50 +47,22 @@ function renderCycles() {
     btn.innerHTML = `<div><span>Ciclo ${c.id}:</span> <b>${c.label}</b></div><div class="chev">›</div>`;
     btn.addEventListener("click", () => {
       messages.push({ from: "user", text: `Abre el ciclo ${c.id}` });
-      pushAiMessage(`Listo. Mostrando detalles del ciclo ${c.id} (demo).`);
+      messages.push({ from: "ai", text: `Listo. Mostrando detalles del ciclo ${c.id} (demo).` });
+      renderMessages();
     });
     cyclesList.appendChild(btn);
   }
 }
 
-/* ===== ELARA Demo Brain (por ahora sin DB/IA real) ===== */
-function elaraDemoReply(userText) {
-  const t = (userText || "").toLowerCase();
-
-  if (t.includes("estado")) return "Ciclo actual: en progreso. Avance 75 por ciento.";
-  if (t.includes("resumen")) return "Resumen del ciclo actual: 72 mil rublos movidos y ganancia neta de 4 mil 250.";
-  if (t.includes("historial")) return "Historial: tengo ciclos recientes listados a la derecha. Dime cuál quieres abrir.";
-  if (t.includes("ganancia")) return "En demo: la ganancia neta del ciclo actual es 4 mil 250 rublos.";
-  if (t.includes("reporte")) return "Reporte demo generado. Después lo exportamos a PDF o Excel.";
-  if (t.includes("crear ciclo") || t.includes("nuevo ciclo"))
-    return "Perfecto. Dime cliente, monto en rublos y tasa. Por ahora lo registro como demo.";
-
-  return "Te escucho. Dime qué quieres hacer con los ciclos: crear, ver historial, abrir un ciclo o generar reporte.";
+/* Respuesta demo (mientras no hay IA real) */
+function elaraDemoReply(text) {
+  const t = (text || "").toLowerCase();
+  if (t.includes("estado")) return "Ciclo actual: en progreso. Avance 75%.";
+  if (t.includes("resumen")) return "Resumen demo: 72 000 ₽ movidos. Ganancia neta +4 250 ₽.";
+  if (t.includes("reporte")) return "Reporte demo generado. Luego lo exportamos a PDF/Excel.";
+  return "Entendido. (Demo) Dime qué quieres hacer con los ciclos.";
 }
 
-/* ===== Text-to-Speech (ELARA habla) ===== */
-function speak(text) {
-  if (!("speechSynthesis" in window)) return;
-
-  // evita solaparse
-  window.speechSynthesis.cancel();
-
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = "es-ES";
-  u.rate = 1.0;
-  u.pitch = 1.0;
-  u.volume = 1.0;
-
-  window.speechSynthesis.speak(u);
-}
-
-function pushAiMessage(text) {
-  messages.push({ from: "ai", text });
-  renderMessages();
-  speak(text);
-}
-
-/* ===== Enviar texto normal ===== */
 function sendText() {
   const text = (chatInput.value || "").trim();
   if (!text) return;
@@ -99,7 +72,8 @@ function sendText() {
   renderMessages();
 
   const reply = elaraDemoReply(text);
-  pushAiMessage(reply);
+  messages.push({ from: "ai", text: reply });
+  renderMessages();
 }
 
 sendBtn.addEventListener("click", sendText);
@@ -107,94 +81,122 @@ chatInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendText();
 });
 
-/* ===== Chips rápidas ===== */
 document.querySelectorAll(".pill").forEach((b) => {
   b.addEventListener("click", () => {
     const action = b.getAttribute("data-action");
-
     if (action === "estado") {
       messages.push({ from: "user", text: "Estado actual" });
-      pushAiMessage("Ciclo actual: En Progreso. Avance 75 por ciento.");
-      return;
-    }
-
-    if (action === "resumen") {
+      messages.push({ from: "ai", text: "Ciclo actual: En Progreso (75%)." });
+    } else if (action === "resumen") {
       messages.push({ from: "user", text: "Resumen del ciclo" });
-      pushAiMessage("Resumen demo: 72 mil rublos movidos y ganancia neta de 4 mil 250.");
-      return;
+      messages.push({ from: "ai", text: "Resumen demo: RUB movido 72 000₽, ganancia +4 250₽." });
+    } else {
+      messages.push({ from: "user", text: "Generar reporte" });
+      messages.push({ from: "ai", text: "Reporte demo generado. Luego lo exportamos a PDF o Excel." });
     }
-
-    messages.push({ from: "user", text: "Generar reporte" });
-    pushAiMessage("Reporte demo generado. Luego lo exportamos a PDF o Excel.");
+    renderMessages();
   });
 });
 
-/* ===== Voice: Speech-to-Text ===== */
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
-let isRecording = false;
+/* =========================
+   VOICE OVERLAY (CALL MODE)
+   ========================= */
+const voiceOverlay = document.getElementById("voiceOverlay");
+const voiceClose = document.getElementById("voiceClose");
+const voiceEnd = document.getElementById("voiceEnd");
+const voiceStartStop = document.getElementById("voiceStartStop");
+const voiceMute = document.getElementById("voiceMute");
+const voiceHint = document.getElementById("voiceHint");
 
-function startVoice() {
-  if (!SpeechRecognition) {
-    alert("Tu navegador no soporta reconocimiento de voz. Usa Chrome o Edge.");
-    return;
-  }
+let callOpen = false;
+let callLive = false;
+let muted = false;
 
-  recognition = new SpeechRecognition();
-  recognition.lang = "es-ES";
-  recognition.interimResults = true;
-  recognition.continuous = false;
+function openVoiceOverlay() {
+  callOpen = true;
+  callLive = false;
+  muted = false;
 
-  isRecording = true;
-  voiceBtn.classList.add("rec");
-  voiceBtn.textContent = "⏺️";
+  voiceOverlay.classList.remove("hidden");
+  voiceOverlay.classList.add("idle");
+  voiceOverlay.classList.remove("live");
+  voiceOverlay.setAttribute("aria-hidden", "false");
 
-  let finalText = "";
+  voiceHint.textContent = "Toca “Hablar” para empezar";
 
-  recognition.onresult = (event) => {
-    let interim = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const chunk = event.results[i][0].transcript;
-      if (event.results[i].isFinal) finalText += chunk;
-      else interim += chunk;
-    }
-    chatInput.value = (finalText || interim).trim();
-  };
+  voiceStartStop.classList.remove("danger");
+  voiceStartStop.classList.add("primary");
+  voiceStartStop.querySelector("span").textContent = "Hablar";
+  voiceStartStop.firstChild.textContent = "🎙️";
 
-  recognition.onerror = () => stopVoice();
-
-  recognition.onend = () => {
-    // al terminar, enviamos lo que quedó
-    const text = (chatInput.value || "").trim();
-    stopVoice();
-    if (text) {
-      messages.push({ from: "user", text });
-      chatInput.value = "";
-      renderMessages();
-
-      const reply = elaraDemoReply(text);
-      pushAiMessage(reply);
-    }
-  };
-
-  recognition.start();
+  voiceMute.querySelector("span").textContent = "Mute";
+  voiceMute.firstChild.textContent = "🔇";
 }
 
-function stopVoice() {
-  isRecording = false;
-  voiceBtn.classList.remove("rec");
-  voiceBtn.textContent = "🎙️";
-  if (recognition) {
-    try { recognition.stop(); } catch {}
-    recognition = null;
+function closeVoiceOverlay() {
+  callOpen = false;
+  callLive = false;
+
+  voiceOverlay.classList.add("hidden");
+  voiceOverlay.classList.remove("idle", "live");
+  voiceOverlay.setAttribute("aria-hidden", "true");
+}
+
+function setLiveState(isLive) {
+  callLive = isLive;
+
+  if (isLive) {
+    voiceOverlay.classList.remove("idle");
+    voiceOverlay.classList.add("live");
+    voiceHint.textContent = muted ? "Mute activado (demo)" : "Hablando… (demo)";
+    voiceStartStop.querySelector("span").textContent = "Pausar";
+    voiceStartStop.firstChild.textContent = "⏸️";
+  } else {
+    voiceOverlay.classList.remove("live");
+    voiceOverlay.classList.add("idle");
+    voiceHint.textContent = "Pausado. Toca “Hablar” para continuar";
+    voiceStartStop.querySelector("span").textContent = "Hablar";
+    voiceStartStop.firstChild.textContent = "🎙️";
   }
 }
 
+/* Abrir overlay desde el botón del chat */
 voiceBtn.addEventListener("click", () => {
-  if (isRecording) stopVoice();
-  else startVoice();
+  if (!callOpen) openVoiceOverlay();
+  else closeVoiceOverlay();
 });
 
-/* ===== Init ===== */
+/* Cerrar overlay */
+voiceClose.addEventListener("click", closeVoiceOverlay);
+voiceEnd.addEventListener("click", closeVoiceOverlay);
+
+/* Click fuera del modal (opcional) */
+voiceOverlay.addEventListener("click", (e) => {
+  if (e.target === voiceOverlay) closeVoiceOverlay();
+});
+
+/* Escape cierra */
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && callOpen) closeVoiceOverlay();
+});
+
+/* Hablar / Pausar (solo UI por ahora) */
+voiceStartStop.addEventListener("click", () => {
+  setLiveState(!callLive);
+});
+
+/* Mute (solo UI por ahora) */
+voiceMute.addEventListener("click", () => {
+  muted = !muted;
+  voiceMute.querySelector("span").textContent = muted ? "Muted" : "Mute";
+  voiceMute.firstChild.textContent = muted ? "🔈" : "🔇";
+  if (callLive) {
+    voiceHint.textContent = muted ? "Mute activado (demo)" : "Hablando… (demo)";
+  }
+});
+
+/* =========================
+   INIT
+   ========================= */
 renderMessages();
 renderCycles();
