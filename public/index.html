@@ -1,1 +1,113 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ELARA</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <div class="shell">
+        <div class="grid">
+          <!-- LEFT: CHAT -->
+          <section class="card chat">
+            <header class="card-header">
+              <div class="header-left">
+                <div class="icon">💬</div>
+                <div class="title-wrap">
+                  <div class="title">ELARA</div>
+                  <div class="sub">
+                    <span class="dot"></span> Online
+                  </div>
+                </div>
+              </div>
+            </header>
 
+            <div id="chatBody" class="chat-body">
+              <!-- mensajes se insertan por JS -->
+            </div>
+
+            <div class="quick">
+              <button class="pill" data-action="resumen">Resumen del ciclo</button>
+              <button class="pill" data-action="estado">Estado actual</button>
+              <button class="pill" data-action="reporte">Generar reporte</button>
+            </div>
+
+            <div class="composer">
+              <input id="chatInput" type="text" placeholder="Escribe un mensaje…" />
+              <button id="sendBtn" class="send" title="Enviar">➤</button>
+            </div>
+          </section>
+
+          <!-- RIGHT: SIDEBAR -->
+          <aside class="sidebar">
+            <section class="card">
+              <header class="card-header">
+                <div class="header-left">
+                  <div class="icon">🕘</div>
+                  <div class="title">Historial de Ciclos</div>
+                </div>
+              </header>
+
+              <div class="list" id="cyclesList"></div>
+
+              <div class="more">
+                <button class="link" id="verMas">Ver más</button>
+              </div>
+            </section>
+
+            <section class="card">
+              <header class="card-header">
+                <div class="title">Resumen del Ciclo Actual</div>
+              </header>
+
+              <div class="summary">
+                <div class="row">
+                  <div class="stat">
+                    <div class="badge ok">◯</div>
+                    <div>
+                      <div class="label">Estado:</div>
+                      <div class="value" id="estadoCiclo">En Progreso</div>
+                    </div>
+                  </div>
+
+                  <div class="stat right">
+                    <div class="badge">📅</div>
+                    <div>
+                      <div class="label">Inicio:</div>
+                      <div class="value" id="inicioCiclo">12 Abril 2024</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="progress">
+                  <div class="progress-top">
+                    <span class="label">Avance:</span>
+                    <span class="label" id="avanceTxt">75%</span>
+                  </div>
+                  <div class="bar">
+                    <div class="bar-fill" id="avanceBar" style="width: 75%"></div>
+                  </div>
+                </div>
+
+                <div class="mini-grid">
+                  <div class="mini">
+                    <div class="label">RUB movido</div>
+                    <div class="value" id="rubMovido">72 000 ₽</div>
+                  </div>
+                  <div class="mini">
+                    <div class="label">Ganancia neta</div>
+                    <div class="value" id="ganancia">+4 250 ₽</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </div>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
