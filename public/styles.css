@@ -414,12 +414,6 @@ body{
   padding:12px;
 }
 
-@media (max-width: 980px){
-  .grid{grid-template-columns: 1fr;}
-  .chat-body{height: 380px;}
-  .list{max-height: 260px;}
-}
-
 /* =========================================================
    VOICE OVERLAY (Call Mode) - Apple-ish
    ========================================================= */
@@ -634,4 +628,118 @@ body{
 .voice-act.danger{
   background: rgba(255,0,80,.14);
   border-color: rgba(255,0,80,.18);
+}
+
+/* =========================
+   MOBILE / RESPONSIVE
+   ========================= */
+
+@media (max-width: 980px){
+  .app{
+    padding: 18px 12px;
+    align-items: flex-start;
+  }
+
+  .shell{
+    padding: 12px;
+    border-radius: 20px;
+  }
+
+  .grid{
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .chat-body{
+    height: 52vh;
+    min-height: 320px;
+    padding: 14px;
+  }
+
+  .card-header{
+    padding: 14px 14px;
+  }
+
+  .quick{
+    padding: 10px 14px;
+    gap: 8px;
+  }
+
+  .pill{
+    padding: 9px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+  }
+
+  .composer{
+    padding: 12px 14px;
+    gap: 8px;
+  }
+
+  .composer input{
+    padding: 11px 12px;
+    border-radius: 12px;
+  }
+
+  .send,
+  .voice{
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+  }
+
+  .list{
+    max-height: 220px;
+  }
+}
+
+@media (max-width: 520px){
+  .shell{
+    width: 100%;
+    padding: 10px;
+    border-radius: 18px;
+  }
+
+  .icon{
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+  }
+
+  .title-wrap .title,
+  .card-header .title{
+    font-size: 16px;
+  }
+
+  .bubble{
+    max-width: 92%;
+    font-size: 13.5px;
+  }
+
+  .mini-grid{
+    grid-template-columns: 1fr;
+  }
+
+  .voice-modal{
+    border-radius: 22px;
+  }
+
+  .orb{
+    width: 132px;
+    height: 132px;
+  }
+
+  .orb-core{
+    width: 112px;
+    height: 112px;
+  }
+
+  .voice-actions{
+    gap: 10px;
+  }
+
+  .voice-act{
+    border-radius: 16px;
+    padding: 12px 8px;
+  }
 }
