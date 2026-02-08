@@ -7,11 +7,14 @@ const sendBtn = document.getElementById("sendBtn");
 const voiceBtn = document.getElementById("voiceBtn");
 const cyclesList = document.getElementById("cyclesList");
 
+/* =========================
+   ESTADO DE CHAT (OpenAI)
+   ========================= */
+// Historial (para conversación real). Se guarda en memoria del navegador (solo mientras no recargues).
+let history = []; // [{role:"user"|"assistant", content:string}]
+
 const messages = [
-  { from: "user", text: "Hola! ¿Cuál es el estado actual del ciclo?" },
-  { from: "ai", text: "El ciclo actual está en progreso. ¿Necesitas algún reporte?" },
-  { from: "user", text: "Sí, ¿puedes mostrarme el resumen del ciclo?" },
-  { from: "ai", text: "Claro, aquí tienes el resumen del ciclo actual..." }
+  { from: "ai", text: "Hola, soy ELARA. Dime qué quieres hacer con tus ciclos. (Ya estoy conectada al backend)" }
 ];
 
 const cycles = [
@@ -23,6 +26,9 @@ const cycles = [
   { id: 15, label: "Agosto 2023" },
 ];
 
+/* =========================
+   RENDER UI
+   ========================= */
 function renderMessages() {
   chatBody.innerHTML = "";
   for (const m of messages) {
@@ -46,34 +52,97 @@ function renderCycles() {
     btn.className = "item";
     btn.innerHTML = `<div><span>Ciclo ${c.id}:</span> <b>${c.label}</b></div><div class="chev">›</div>`;
     btn.addEventListener("click", () => {
-      messages.push({ from: "user", text: `Abre el ciclo ${c.id}` });
-      messages.push({ from: "ai", text: `Listo. Mostrando detalles del ciclo ${c.id} (demo).` });
-      renderMessages();
+      // esto manda un mensaje a ELARA vía API, con contexto
+      sendToElara(`Abre el ciclo ${c.id} y muéstrame un resumen breve.`, true);
     });
     cyclesList.appendChild(btn);
   }
 }
 
-/* Respuesta demo (mientras no hay IA real) */
-function elaraDemoReply(text) {
-  const t = (text || "").toLowerCase();
-  if (t.includes("estado")) return "Ciclo actual: en progreso. Avance 75%.";
-  if (t.includes("resumen")) return "Resumen demo: 72 000 ₽ movidos. Ganancia neta +4 250 ₽.";
-  if (t.includes("reporte")) return "Reporte demo generado. Luego lo exportamos a PDF/Excel.";
-  return "Entendido. (Demo) Dime qué quieres hacer con los ciclos.";
+/* =========================
+   LLAMADA AL BACKEND /api/chat
+   ========================= */
+async function callChatAPI(userText) {
+  const payload = {
+    message: userText,
+    history // le mandamos el historial para que ELARA mantenga contexto
+  };
+
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const err = await safeJson(res);
+    throw new Error(err?.error || `HTTP ${res.status}`);
+  }
+
+  return await res.json(); // {reply, history?}
 }
 
+async function safeJson(res) {
+  try { return await res.json(); } catch { return null; }
+}
+
+function pushUserMessage(text) {
+  messages.push({ from: "user", text });
+  renderMessages();
+}
+
+function pushAiMessage(text) {
+  messages.push({ from: "ai", text });
+  renderMessages();
+}
+
+/**
+ * sendToElara(text, silentInput=false)
+ * - silentInput: si true, no pone el texto en el input, lo manda directo.
+ */
+async function sendToElara(text, silentInput = false) {
+  const msg = (text || "").trim();
+  if (!msg) return;
+
+  // UI
+  pushUserMessage(msg);
+  if (!silentInput) chatInput.value = "";
+
+  // pequeño “thinking”
+  const thinkingIdx = messages.length;
+  messages.push({ from: "ai", text: "..." });
+  renderMessages();
+
+  try {
+    const data = await callChatAPI(msg);
+
+    // quita thinking
+    messages.splice(thinkingIdx - 0, 1);
+    // respuesta
+    const reply = (data?.reply || "").trim() || "No recibí respuesta del servidor.";
+    pushAiMessage(reply);
+
+    // actualiza historial
+    if (Array.isArray(data?.history) && data.history.length) {
+      history = data.history;
+    } else {
+      // fallback si el server no devuelve history
+      history = [...history, { role: "user", content: msg }, { role: "assistant", content: reply }].slice(-12);
+    }
+  } catch (e) {
+    // quita thinking
+    messages.splice(thinkingIdx - 0, 1);
+    pushAiMessage(`Error conectando con ELARA: ${e.message}`);
+  }
+}
+
+/* =========================
+   EVENTOS: ENVIAR TEXTO
+   ========================= */
 function sendText() {
   const text = (chatInput.value || "").trim();
   if (!text) return;
-
-  messages.push({ from: "user", text });
-  chatInput.value = "";
-  renderMessages();
-
-  const reply = elaraDemoReply(text);
-  messages.push({ from: "ai", text: reply });
-  renderMessages();
+  sendToElara(text);
 }
 
 sendBtn.addEventListener("click", sendText);
@@ -81,25 +150,21 @@ chatInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendText();
 });
 
+/* =========================
+   CHIPS RÁPIDAS
+   ========================= */
 document.querySelectorAll(".pill").forEach((b) => {
   b.addEventListener("click", () => {
     const action = b.getAttribute("data-action");
-    if (action === "estado") {
-      messages.push({ from: "user", text: "Estado actual" });
-      messages.push({ from: "ai", text: "Ciclo actual: En Progreso (75%)." });
-    } else if (action === "resumen") {
-      messages.push({ from: "user", text: "Resumen del ciclo" });
-      messages.push({ from: "ai", text: "Resumen demo: RUB movido 72 000₽, ganancia +4 250₽." });
-    } else {
-      messages.push({ from: "user", text: "Generar reporte" });
-      messages.push({ from: "ai", text: "Reporte demo generado. Luego lo exportamos a PDF o Excel." });
-    }
-    renderMessages();
+    if (action === "estado") return sendToElara("Dime el estado actual del ciclo.");
+    if (action === "resumen") return sendToElara("Muéstrame el resumen del ciclo actual.");
+    return sendToElara("Genera un reporte del ciclo actual con puntos clave.");
   });
 });
 
 /* =========================
    VOICE OVERLAY (CALL MODE)
+   Solo UI/estados por ahora
    ========================= */
 const voiceOverlay = document.getElementById("voiceOverlay");
 const voiceClose = document.getElementById("voiceClose");
@@ -124,8 +189,6 @@ function openVoiceOverlay() {
 
   voiceHint.textContent = "Toca “Hablar” para empezar";
 
-  voiceStartStop.classList.remove("danger");
-  voiceStartStop.classList.add("primary");
   voiceStartStop.querySelector("span").textContent = "Hablar";
   voiceStartStop.firstChild.textContent = "🎙️";
 
@@ -160,39 +223,31 @@ function setLiveState(isLive) {
   }
 }
 
-/* Abrir overlay desde el botón del chat */
 voiceBtn.addEventListener("click", () => {
   if (!callOpen) openVoiceOverlay();
   else closeVoiceOverlay();
 });
 
-/* Cerrar overlay */
 voiceClose.addEventListener("click", closeVoiceOverlay);
 voiceEnd.addEventListener("click", closeVoiceOverlay);
 
-/* Click fuera del modal (opcional) */
 voiceOverlay.addEventListener("click", (e) => {
   if (e.target === voiceOverlay) closeVoiceOverlay();
 });
 
-/* Escape cierra */
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && callOpen) closeVoiceOverlay();
 });
 
-/* Hablar / Pausar (solo UI por ahora) */
 voiceStartStop.addEventListener("click", () => {
   setLiveState(!callLive);
 });
 
-/* Mute (solo UI por ahora) */
 voiceMute.addEventListener("click", () => {
   muted = !muted;
   voiceMute.querySelector("span").textContent = muted ? "Muted" : "Mute";
   voiceMute.firstChild.textContent = muted ? "🔈" : "🔇";
-  if (callLive) {
-    voiceHint.textContent = muted ? "Mute activado (demo)" : "Hablando… (demo)";
-  }
+  if (callLive) voiceHint.textContent = muted ? "Mute activado (demo)" : "Hablando… (demo)";
 });
 
 /* =========================
